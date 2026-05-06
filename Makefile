@@ -1,71 +1,108 @@
-# ==============================================================================
-# КРОСПЛАТФОРМНА КОНФІГУРАЦІЯ (Автовизначення ОС)
-# ==============================================================================
+.DEFAULT_GOAL := help
+GREEN  := $(shell tput -Txterm setaf 2 2>/dev/null || echo '')
+YELLOW := $(shell tput -Txterm setaf 3 2>/dev/null || echo '')
+RESET  := $(shell tput -Txterm sgr0 2>/dev/null || echo '')
+
+PORT_BROWSER  := 3000
+PORT_ADMINER  := 8080
+
+# ==========================================
+# OS Специфічні змінні (Docker, Browser, VENV)
+# ==========================================
 ifeq ($(OS),Windows_NT)
-	# Налаштування для Windows
-	PYTHON := python
-	VENV_BIN := venv/Scripts
-	RM_DIR := rmdir /s /q
-	RM_FILE := del /q
+    DOCKER_START_CMD := start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    WAIT_DOCKER := powershell -Command "do { Write-Host 'Чекаю на Docker...'; Start-Sleep -Seconds 2 } while (!(docker info 2>$$null))"
+    OPEN_BROWSER := start http://127.0.0.1:$(PORT_BROWSER)
+    OPEN_ADMINER := start http://127.0.0.1:$(PORT_ADMINER)
+    VENV_PYTHON := .venv\Scripts\python
+else ifeq ($(shell uname),Darwin)
+    DOCKER_START_CMD := open -a Docker
+    WAIT_DOCKER := until docker info >/dev/null 2>&1; do echo "Чекаю на Docker..."; sleep 3; done
+    OPEN_BROWSER := open http://127.0.0.1:$(PORT_BROWSER)
+    OPEN_ADMINER := open http://127.0.0.1:$(PORT_ADMINER)
+    VENV_PYTHON := .venv/bin/python
 else
-	# Налаштування для macOS, Linux, UNIX
-	PYTHON := python3
-	VENV_BIN := venv/bin
-	RM_DIR := rm -rf
-	RM_FILE := rm -f
+    DOCKER_START_CMD := systemctl start docker
+    WAIT_DOCKER := until docker info >/dev/null 2>&1; do echo "Чекаю на Docker..."; sleep 3; done
+    OPEN_BROWSER := xdg-open http://127.0.0.1:$(PORT_BROWSER) &> /dev/null || true
+    OPEN_ADMINER := xdg-open http://127.0.0.1:$(PORT_ADMINER) &> /dev/null || true
+    VENV_PYTHON := .venv/bin/python
 endif
 
-# Вказуємо, що ці команди не є назвами файлів
-.PHONY: help setup dev build clean db-up db-down
+# ==========================================
+# БАЗОВІ ПЕРЕВІРКИ ТА СЕРЕДОВИЩЕ
+# ==========================================
+ensure-docker:
+	@docker info >/dev/null 2>&1 || (echo "$(YELLOW)Docker не запущено. Ініціюю автозапуск...$(RESET)" && $(DOCKER_START_CMD) && $(WAIT_DOCKER) && echo "$(GREEN)✅ Docker готовий до роботи!$(RESET)")
 
-# ==============================================================================
-# ДОДАТКОВЕ МЕНЮ (Викликається за замовчуванням при введенні `make`)
-# ==============================================================================
-help:
-	@echo "===================================================================="
-	@echo "🛠️  Інструменти управління проєктом ДЗ №2"
-	@echo "===================================================================="
-	@echo "Доступні команди:"
-	@echo "  make setup   - 🚀 Повне налаштування з нуля (venv + залежності + підняття БД)"
-	@echo "  make dev     - 💻 Щоденна робота (підняти базу, якщо лежить, і запустити Marimo)"
-	@echo "  make build   - 📦 Експорт у HTML (для здачі в LMS)"
-	@echo "  make db-up   - 🗄️  Підняти інфраструктуру (Docker)"
-	@echo "  make db-down - 🛑 Зупинити інфраструктуру (Docker)"
-	@echo "  make clean   - 🧹 Очищення проєкту (видалення віртуального середовища та збірки)"
-	@echo "===================================================================="
+# Автоматичне створення .venv, якщо його немає
+.venv:
+	@echo "$(YELLOW)📦 Ініціалізація ізольованого середовища .venv...$(RESET)"
+	python3 -m venv .venv || python -m venv .venv
 
-# ==============================================================================
-# ОСНОВНІ КОМАНДИ
-# ==============================================================================
+# Змінна для фонового виконання (без інтерактиву)
+DB_MANAGER = docker compose exec -T api python backend/db_manager.py
 
-# 1. Повне налаштування проєкту з нуля
-setup:
-	$(PYTHON) -m venv venv
-	$(VENV_BIN)/pip install -r requirements.txt
-	docker-compose up -d
-	@echo "✅ Інфраструктуру розгорнуто. Adminer доступний на http://localhost:8080"
+help: ## Показати це меню
+	@echo "$(GREEN)GOD MODE SQL STAND CONSOLE$(RESET)"
+	@awk 'BEGIN {FS = ":.*##"}; /^[a-zA-Z_0-9-]+:.*?##/ { printf "  $(YELLOW)%-20s$(RESET) %s\n", $$1, $$2 }; /^##@/ { printf "\n$(GREEN)%s$(RESET)\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
-# 2. Щоденна робота
-dev: db-up
-	$(VENV_BIN)/marimo edit app.py
+##@ 🚀 Запуск проекту
+start: backend ## Запустити ВЕСЬ проект (Backend + Frontend + Browser)
+	@echo "$(GREEN)Відкриваю IDE у браузері...$(RESET)"
+	@$(OPEN_BROWSER)
+	@$(MAKE) frontend
 
-# 3. Експорт у HTML
-build:
-	$(VENV_BIN)/marimo export html app.py -o hw_submission.html
-	@echo "✅ Файл hw_submission.html згенеровано."
+.PHONY: frontend
+frontend: .venv ## Запустити тільки Frontend (через .venv)
+	@echo "$(GREEN)🌐 Запуск Frontend-сервера на порту $(PORT_BROWSER) через .venv... (Ctrl+C для зупинки)$(RESET)"
+	$(VENV_PYTHON) -m http.server $(PORT_BROWSER) --directory frontend --bind 127.0.0.1
 
-# 4. Управління базою даних
-db-up:
-	docker-compose up -d
+backend: ensure-docker ## Підняти тільки Backend (API та Adminer)
+	docker compose up -d --build
 
-db-down:
-	docker-compose down
+##@ ⚙️ Управління ядром
+down: ensure-docker ## Зупинити Backend
+	docker compose down
 
-# 5. Повне очищення проєкту (видалення venv, збірки, секретів та ДАНИХ бази у Docker)
-clean:
-	@echo "🛑 Зупинка та повне очищення Docker (контейнери, мережі та ВОЛЮМИ З ДАНИМИ)..."
-	docker-compose down -v --remove-orphans
-	@echo "🧹 Видалення локальних середовищ та файлів..."
-	-$(RM_DIR) venv
-	-$(RM_FILE) hw_submission.html
-	@echo "✨ Проєкт повністю очищено до початкового стану."
+logs: ensure-docker ## Перегляд логів API
+	docker compose logs -f api
+
+##@ 🗄️ Фабрика Баз Даних
+db-manage: ensure-docker ## Інтерактивне управління БД через CLI
+	@echo "$(GREEN)Вхід в інтерактивний менеджер баз даних...$(RESET)"
+	docker compose exec api python backend/db_manager.py
+
+db-adminer: ## Відкрити Adminer у браузері (Резервне управління БД)
+	@echo "$(YELLOW)Відкриваю Adminer на порту $(PORT_ADMINER)...$(RESET)"
+	@$(OPEN_ADMINER)
+
+db-add: ensure-docker ## Додати БД (make db-add engine=postgres version=16)
+	@if [ "$(engine)" = "" ]; then \
+		$(DB_MANAGER) add; \
+	else \
+		$(DB_MANAGER) add $(engine) $(version); \
+	fi
+
+db-rm: ensure-docker ## Видалити БД (make db-rm id=rdb_postgres_1234)
+	$(DB_MANAGER) rm $(id)
+
+db-list: ensure-docker ## Список активних баз
+	$(DB_MANAGER) list
+
+##@ 📦 Утиліти
+build: .venv ## Зібрати весь проєкт в один HTML-файл для здачі (hw_submission.html)
+	@echo "$(YELLOW)🏗️ Починаю збірку проєкту в єдиний файл...$(RESET)"
+	$(VENV_PYTHON) builder.py
+	@echo "$(GREEN)✅ Успішно! Згенеровано файл: hw_submission.html$(RESET)"
+	@echo "$(GREEN)Ви можете відкрити його в браузері напряму (без сервера) для перевірки.$(RESET)"
+
+clean: ensure-docker ## Жорстке очищення системи (API + всі бази)
+	@echo "$(YELLOW)🧹 Видалення всіх згенерованих баз даних...$(RESET)"
+	@docker ps -a -q --filter "name=rdb_postgres" --filter "name=rdb_mysql" --filter "name=rdb_oracle" --filter "name=rdb_mssql" | xargs -r docker rm -f
+	@echo "$(YELLOW)🧨 Знищення ядра API та мережі...$(RESET)"
+	@docker compose down -v --remove-orphans
+	@rm -f databases.json
+	@rm -rf dist/
+	@rm -rf .venv/
+	@echo "$(GREEN)✅ Стенд дезінтегровано. Абсолютно чистий аркуш!$(RESET)"
