@@ -109,33 +109,52 @@ make build
 
 ### 2. Структура проекту, ER-діаграма та Flowchart
 
-#### Структура проекту
+#### Структура проекту - Логічний (Business-Logic First)
 
 ```text
-goit-rdb-hw-02/
-├── css/                        # 🎨 Стилі та оформлення
-│   └── theme.css               # 🌗 Теми (Dracula/Alucard) та UI стилі
+goit-rdb-hw-02/                 # 🌌 Універсальний простір стенду
 │
-├── locales/                    # 🌍 Локалізація інтерфейсу
-│   ├── uk.js                   # 🇺🇦 Український переклад
-│   └── en.js                   # 🇬🇧 English translation
+├── backend/                    # 🐍 Backend Service (Python / FastAPI)
+│   ├── main.py                 # REST API та SQL Execution Engine
+│   ├── db_manager.py           # 🗄️ CLI-менеджер інфраструктури (Docker, Dump/Restore)
+│   ├── Dockerfile              # 🫍 Конфігурація мікросервісу
+│   └── requirements.txt        # 🧬 Залежності бекенду
 │
-├── dicts/                      # 📚 Словники (IntelliSense)
-│   └── *.json                  # 🧠 Синтаксис команд для різних СУБД
+├── frontend/                   # 🌐 Frontend App (Vanilla JS / Event-Driven)
+│   ├── css/                    # 🎨 Tailwind конфіги та UI теми (Dracula/Alucard)
+│   ├── dicts/                  # 🧠 Словники IntelliSense для різних СУБД
+│   │   ├── mssql.json          # Словник для MS SQL Server
+│   │   ├── mysql.json          # Словник для MySQL
+│   │   ├── oracle.json         # Словник для Oracle DB
+│   │   └── postgres.json       # Словник для PostgreSQL
+│   ├── js/                     # ⚙️ Бізнес-логіка
+│   │   ├── core.js             # 🚌 Event Bus (Шина подій)
+│   │   ├── config.js           # 🔧 Глобальний State
+│   │   └── components/         # 🧩 Ізольовані UI-модулі
+│   │       ├── 1_WorkspaceHeader.js  # 🎛️ Панель управління, підключення та теми
+│   │       ├── 2_QueryEditor.js      # 📝 CodeMirror, таби завдань, God Mode
+│   │       ├── 3_DataGrid.js         # 📊 Рендеринг таблиць та ETL-імпорт CSV
+│   │       ├── 4_SchemaInspector.js  # 🕸️ Генерація ER-діаграм (Mermaid.js)
+│   │       ├── 5_ConsoleLogger.js    # 💻 Вбудований термінал логів та помилок
+│   │       └── 6_SnippetEngine.js    # ✂️ Управління шаблонами коду та автозаповненням
+│   ├── locales/                # 🌍 Мовні пакети (uk.js, en.js)
+│   ├── sql/                    # 📜 SQL-скрипти (DDL/DML/DQL)
+│   │   └── default.sql         # 🏆 Головний файл SQL-запитів до поточного ДЗ
+│   └── index.html              # Головний Entry Point
 │
-├── js/                         # ⚙️ Основна логіка застосунку
-│   ├── core.js                 # 🚌 Event Bus (шина подій)
-│   ├── config.js               # 🔧 Глобальні конфігурації
-│   └── components/             # 🧩 Ізольовані модулі (QueryEditor, DataGrid, ERD)
+├── img/                        # 🖼️ Медіа-ассети для оформлення ReadMe.md
+│   └── *.png                   # Скриншоти результатів для здачі ДЗ в LMS
 │
-├── sql/                        # 💾 Базові SQL-скрипти
-│   └── default.sql             # 🏆 Еталонний скрипт нормалізації (3НФ) для ДЗ
-│
-├── index.html                  # 🌐 Головний інтерфейс IDE
-├── builder.py                  # 🛠️ Python-бандлер для генерації Standalone-версії
-├── Makefile                    # 🪄 Оркестратор команд (make build, make start)
-├── hw_submission.html          # 📦 Зібраний All-in-One файл (генерується 'make build')
-└── README.md                   # 📖 Документація проекту
+├── .venv/                      # 📦 Ізольоване середовище Python (Автогенерація)
+├── databases.json              # 🗄️ Реєстр активних БД-контейнерів
+├── docker-compose.yml          # 🐳 Мережева інфраструктура
+├── Makefile                    # 🪄 Головний Оркестратор (make start, make db-add)
+├── builder.py                  # 🛠️ CI/CD Бандлер (Збірка HTML версії)
+├── hw_submission.html          # 📦 Фінальний артефакт (Генерується 'make build')
+├── sql_query_***.sql           # 💾 Експортовані нашою IDE SQL-скрипти для MySQL
+├── .editorconfig               # ⚙️ Правила форматування коду для IDE
+├── .gitignore                  # 🙈 Файли, які ігнорує Git
+└── README.md                   # 📖 Технічна документація проекту
 ```
 
 #### ER-Діаграма (Третя нормальна форма - 3НФ)
