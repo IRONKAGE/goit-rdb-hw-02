@@ -1,4 +1,4 @@
-import docker, json, os, random, sys, re
+import docker, json, os, random, sys, re, time, threading, itertools
 
 client = docker.from_env()
 CONFIG_FILE = "databases.json"
@@ -11,50 +11,96 @@ def save_cfg(d):
     json.dump(d, open(CONFIG_FILE, "w"), indent=4)
 
 def add_db(engine, version="latest"):
-    # Жорстка санітизація вводу: залишаємо тільки букви, цифри, крапки та дефіси
     engine = re.sub(r'[^\w.-]', '', str(engine)).lower()
     version = re.sub(r'[^\w.-]', '', str(version))
 
     db_id = f"rdb_{engine}_{random.randint(1000, 9999)}"
     cfg = load_cfg()
 
+    # Зверни увагу на доданий "start_period" у наносекундах (1 сек = 1000000000)
     if engine == "postgres":
         img, port = f"postgres:{version}-alpine", random.randint(5433, 5499)
         usr, pwd, dbn = "admin", "secret", "stand_db"
         env = [f"POSTGRES_USER={usr}", f"POSTGRES_PASSWORD={pwd}", f"POSTGRES_DB={dbn}"]
         url = f"postgresql://{usr}:{pwd}@{db_id}:5432/{dbn}"
-        hc = {"test": ["CMD-SHELL", f"pg_isready -U {usr} -d {dbn}"], "interval": 10000000000, "timeout": 5000000000, "retries": 5}
+        hc = {"test": ["CMD-SHELL", f"pg_isready -U {usr} -d {dbn}"], "interval": 10000000000, "timeout": 5000000000, "retries": 5, "start_period": 10000000000}
 
     elif engine == "mysql":
         img, port = f"mysql:{version}", random.randint(3307, 3399)
         usr, pwd, dbn = "admin", "secret", "stand_db"
         env = [f"MYSQL_ROOT_PASSWORD={pwd}", f"MYSQL_DATABASE={dbn}", f"MYSQL_USER={usr}", f"MYSQL_PASSWORD={pwd}"]
         url = f"mysql+pymysql://{usr}:{pwd}@{db_id}:3306/{dbn}"
-        hc = {"test": ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", usr, f"-p{pwd}"], "interval": 10000000000, "timeout": 5000000000, "retries": 5}
+        hc = {"test": ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", usr, f"-p{pwd}"], "interval": 10000000000, "timeout": 5000000000, "retries": 5, "start_period": 15000000000}
 
     elif engine == "oracle":
         img, port = f"gvenzl/oracle-free:{version}", random.randint(1522, 1599)
         usr, pwd, dbn = "admin", "secret", "freepdb1"
         env = [f"ORACLE_PASSWORD={pwd}", f"APP_USER={usr}", f"APP_PASSWORD={pwd}"]
         url = f"oracle+oracledb://{usr}:{pwd}@{db_id}:1521/?service_name={dbn}"
-        hc = {"test": ["CMD", "healthcheck.sh"], "interval": 15000000000, "timeout": 10000000000, "retries": 10}
+        # Даємо Oracle аж 120 секунд фори на запуск (120000000000)
+        hc = {"test": ["CMD", "healthcheck.sh"], "interval": 15000000000, "timeout": 10000000000, "retries": 10, "start_period": 120000000000}
 
     elif engine == "mssql":
         img, port = f"mcr.microsoft.com/mssql/server:{version}", random.randint(1434, 1499)
         usr, pwd, dbn = "sa", "SuperSecret123!", "master"
         env = ["ACCEPT_EULA=Y", f"MSSQL_SA_PASSWORD={pwd}"]
         url = f"mssql+pymssql://{usr}:{pwd}@{db_id}:1433/{dbn}"
-        hc = {"test": ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-U", usr, "-P", pwd, "-Q", "SELECT 1"], "interval": 10000000000, "timeout": 5000000000, "retries": 5}
+        # Даємо MSSQL 60 секунд фори (60000000000)
+        hc = {"test": ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-U", usr, "-P", pwd, "-Q", "SELECT 1"], "interval": 10000000000, "timeout": 5000000000, "retries": 5, "start_period": 60000000000}
 
     else: return print("❌ Error: Invalid engine. Use postgres, mysql, oracle, or mssql.")
 
     print(f"🚀 Пробудження {img} (ID: {db_id})...")
     try:
+        try:
+            client.images.get(img)
+        except docker.errors.ImageNotFound:
+            print(f"⬇️ Образ не знайдено локально. Починаю стягувати {img} з Docker Hub...")
+            is_pulling = True
+            def spinner():
+                chars = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+                while is_pulling:
+                    sys.stdout.write(f"\r{YELLOW}   Завантаження гігабайтів даних... {next(chars)}{RESET} ")
+                    sys.stdout.flush()
+                    time.sleep(0.1)
+            t = threading.Thread(target=spinner)
+            t.start()
+            try:
+                client.images.pull(img)
+            finally:
+                is_pulling = False
+                t.join()
+            print(f"\r{GREEN}✅ Образ успішно завантажено!{' ' * 30}{RESET}")
+
+        print("⏳ Запуск та очікування ініціалізації БД ", end="")
+        sys.stdout.flush()
+
         c = client.containers.run(
             img, name=db_id, environment=env,
             ports={f"{'5432' if engine=='postgres' else '3306' if engine=='mysql' else '1521' if engine=='oracle' else '1433'}/tcp": port},
             healthcheck=hc, network=NETWORK_NAME, detach=True
         )
+
+        max_retries = 90 # Чекаємо до 3 хвилин (Oracle важкий)
+        for _ in range(max_retries):
+            c.reload()
+            health_status = c.attrs.get('State', {}).get('Health', {}).get('Status', 'starting')
+
+            if health_status == 'healthy':
+                print(" ✅ ГОТОВО!")
+                break
+            elif health_status == 'unhealthy':
+                print(" ❌ ПОМИЛКА (Unhealthy)!")
+                c.remove(force=True) # Зносимо бракований контейнер
+                raise Exception(f"Контейнер {db_id} не зміг запуститися. Можливо, не вистачає RAM.")
+
+            print(".", end="")
+            sys.stdout.flush()
+            time.sleep(2)
+        else:
+            print(" ⚠️ ТАЙМАУТ!")
+            c.remove(force=True)
+            raise Exception("База завантажується занадто довго. Контейнер знищено.")
 
         cfg[db_id] = {
             "engine": engine,
@@ -70,7 +116,8 @@ def add_db(engine, version="latest"):
 
         save_cfg(cfg)
         print(f"✅ БД {db_id} інтегрована! Доступна на локальному порту {port}")
-    except Exception as e: print(f"❌ Docker Error: {e}")
+    except Exception as e:
+        print(f"\n❌ Docker Error: {e}")
 
 def rm_db(db_id):
     cfg = load_cfg()
@@ -94,7 +141,6 @@ def print_usage():
     print("-" * 40 + "\n")
 
 def interactive_menu():
-    """Інтерактивне CLI меню для ручного управління"""
     print("\n" + "="*45)
     print(f" 🗄️  {GREEN}GOD MODE: Менеджер Баз Даних{RESET}")
     print("="*45)
